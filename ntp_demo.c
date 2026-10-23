@@ -18,8 +18,9 @@
 #include "qosa_log.h"
 #include "qosa_rtc.h"
 #include "qcm_ntp_app.h"
-#include "unirtos_app_init_registry.h"
-
+#if (defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
+#include "qosa_wlan.h"
+#endif
 /*===========================================================================
  *  Macro Definition
  ===========================================================================*/
@@ -32,9 +33,11 @@
 #define UNIR_NTP_DEMO_SERVER          "ntp.aliyun.com"
 #define UNIR_NTP_DEMO_PORT            123
 
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC))   
 // NTP configuration parameters
 #define UNIR_NTP_DEMO_SIMID           0
 #define UNIR_NTP_DEMO_PDPID           1
+#endif
 // NTP retry count and retry interval time
 #define UNIR_NTP_DEMO_RETRY_CNT       3
 #define UNIR_NTP_DEMO_RETRY_TIMEOUT   15
@@ -57,7 +60,66 @@ typedef struct
 
 static qosa_task_t g_ntp_demo_task = QOSA_NULL;
 static qosa_msgq_t g_ntp_demo_msg = QOSA_NULL;
+#if (defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
 
+static qosa_sem_t  wifi_sem = QOSA_NULL;
+
+static void qcm_socket_app_wifi_event_cb(void *param)
+{
+    qosa_wlan_event_msg_t  *event_info = (qosa_wlan_event_msg_t *)param;
+
+    switch(event_info->event)
+    {
+    case QOSA_WLAN_EVT_STA_CONNECTED:
+        {
+            QLOGI("wlan connected!\n");
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_GOT_IP:
+        {
+            QLOGI("wlan got ip!\n");
+            QLOGI("wifi_sem=%p\n", wifi_sem);
+            if(wifi_sem != QOSA_NULL)
+                qosa_sem_release(wifi_sem);
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_DISCONNECTED:
+        {
+            QLOGI("wlan disconnected!\n");            
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_PASSWORD_WRONG:
+    case QOSA_WLAN_EVT_STA_NO_AP_FOUND:
+    case QOSA_WLAN_EVT_STA_CONNECT_FAILED:
+        {
+            QLOGI("wlan connect failed!\n");
+        }
+        break;
+    default:
+        break;
+    }
+}
+static int qcm_socket_app_wifi_active(void)
+{
+    qosa_wlan_network_t  wlan_cfg = {0};
+    qosa_wlan_sta_config_t sta_cfg = {0};
+    qosa_wlan_driver_init();
+
+    sta_cfg.dhcp_enabled = QOSA_TRUE;    
+    qosa_memcpy(sta_cfg.ssid, "cbq666", qosa_strlen("cbq666"));
+    qosa_memcpy(sta_cfg.pwd, "12345678", qosa_strlen("12345678"));
+    sta_cfg.ip.ipv4.addr_type = QOSA_WLAN_ADDR_TYPE_DHCP;
+
+    wlan_cfg.mode = QOSA_WLAN_MODE_STA;
+    wlan_cfg.sta_cfg = &sta_cfg;
+    
+    qosa_wlan_register_status_cb(qcm_socket_app_wifi_event_cb);
+
+    qosa_wlan_start(&wlan_cfg);
+    
+    return 0;
+}
+#endif
 /*===========================================================================
  *  Static API Functions
  ===========================================================================*/
@@ -148,7 +210,22 @@ static void unir_ntp_demo_process(void *ctx)
 
     // Wait 10 seconds for log capture and network registration
     qosa_task_sleep_sec(10);
-
+#if (defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
+    
+    qosa_sem_create(&wifi_sem, 0);
+    QOSA_ASSERT(wifi_sem != QOSA_NULL);
+    QLOGI("wifi_sem=%p\n", wifi_sem);
+    if(qcm_socket_app_wifi_active() != 0)
+    {
+        QLOGE("wlan error");
+        return;
+    }
+    qosa_sem_wait(wifi_sem, QOSA_WAIT_FOREVER);
+    QLOGI("wlan actived!\n");
+    qosa_wlan_dns_server_t dns_server[1]= {0};
+    qosa_strcpy(dns_server[0].address, "8.8.8.8");
+    qosa_wlan_set_dns_server(dns_server, 1);
+#endif
     // Apply for NTP client id
     client_id = qcm_ntp_client_new();
     if (client_id <= 0)
@@ -157,9 +234,11 @@ static void unir_ntp_demo_process(void *ctx)
         return;
     }
 
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC))   
     // Configure NTP parameters and start synchronization process
     ntp_options.sim_id = UNIR_NTP_DEMO_SIMID;
     ntp_options.pdp_id = UNIR_NTP_DEMO_PDPID;
+#endif
 
     ntp_options.num_data_bytes = 48;
     ntp_options.retry_cnt = UNIR_NTP_DEMO_RETRY_CNT;
